@@ -45,6 +45,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _nameController = TextEditingController(text: _student!.name);
       _phoneController = TextEditingController(text: _student!.phone);
       _addressController = TextEditingController(text: _student!.address);
+      _regNoController = TextEditingController(text: _student!.regNo);
+      _sectionController = TextEditingController(text: _student!.section);
       _photoUrl = _student!.photoUrl;
       _isLoading = false;
     });

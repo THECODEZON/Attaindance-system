@@ -6,6 +6,7 @@ import '../services/attendance_service.dart';
 import '../services/auth_service.dart';
 import '../models/student_model.dart';
 import '../models/subject_attendance.dart';
+import '../models/attendance_record.dart';
 
 class HomeScreen extends StatefulWidget {
   final String uid;
@@ -25,22 +26,29 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   bool _isProfileLoading = true;
 
   bool _isLoading = false;
-  String _statusMessage = 'Tap the fingerprint to mark attendance.';
+  String _statusMessage = 'Tap the button to mark your attendance';
   bool _isSuccess = false;
   bool _isError = false;
+  bool _alreadyMarkedToday = false;
   String _currentTime = '';
   String _currentDate = '';
   late Timer _timer;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
 
+  // Stats
+  int _totalPresent = 0;
+  int _totalRejected = 0;
+
   @override
   void initState() {
     super.initState();
-    _student = Student.mock(); // Temporary initial state
+    _student = Student.mock();
     _subjects = SubjectAttendance.mockList();
     _loadProfile();
-    
+    _checkTodayStatus();
+    _loadStats();
+
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
 
@@ -49,7 +57,7 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
 
-    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.1).animate(
+    _pulseAnimation = Tween<double>(begin: 1.0, end: 1.08).animate(
       CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
     );
   }
@@ -67,6 +75,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
       }
     } catch (e) {
       if (mounted) setState(() => _isProfileLoading = false);
+    }
+  }
+
+  Future<void> _checkTodayStatus() async {
+    final record = await _attendanceService.getTodayRecord(widget.uid);
+    if (record != null && mounted) {
+      setState(() {
+        _alreadyMarkedToday = true;
+        _isSuccess = true;
+        _statusMessage = 'Attendance already marked today at ${record.markedAt != null ? DateFormat('hh:mm a').format(record.markedAt!) : "earlier"}';
+      });
+    }
+  }
+
+  Future<void> _loadStats() async {
+    final stats = await _attendanceService.getAttendanceStats(widget.uid);
+    if (mounted) {
+      setState(() {
+        _totalPresent = stats['present'] ?? 0;
+        _totalRejected = stats['rejected'] ?? 0;
+      });
     }
   }
 
@@ -88,31 +117,117 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   void _markAttendance() async {
+    if (_alreadyMarkedToday) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('You have already marked attendance today!'),
+          backgroundColor: Colors.orange.shade600,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isLoading = true;
-      _statusMessage = 'Verifying Location...';
+      _statusMessage = 'Verifying location & WiFi...';
       _isSuccess = false;
       _isError = false;
     });
 
     final result = await _attendanceService.markAttendance(widget.uid, widget.email);
 
+    final bool success = result['success'] ?? false;
+    final String message = result['message'] ?? 'Unknown error';
+    final bool alreadyMarked = result['alreadyMarked'] ?? false;
+
     setState(() {
       _isLoading = false;
-      _statusMessage = result;
-      _isSuccess = result.startsWith('SUCCESS');
-      _isError = !_isSuccess;
+      _statusMessage = message;
+      _isSuccess = success;
+      _isError = !success;
+      if (success || alreadyMarked) {
+        _alreadyMarkedToday = true;
+      }
     });
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result.replaceAll('SUCCESS: ', '')),
-          backgroundColor: _isSuccess ? Colors.green.shade600 : Colors.red.shade600,
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+    // Reload stats after marking
+    if (success) {
+      _loadStats();
     }
+
+    if (mounted) {
+      _showResultDialog(success, message, result);
+    }
+  }
+
+  void _showResultDialog(bool success, String message, Map<String, dynamic> result) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(
+          children: [
+            Icon(
+              success ? Icons.check_circle : Icons.error,
+              color: success ? Colors.green : Colors.red,
+              size: 28,
+            ),
+            const SizedBox(width: 10),
+            Text(
+              success ? 'Attendance Marked!' : 'Attendance Failed',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: success ? Colors.green.shade700 : Colors.red.shade700,
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(message, style: const TextStyle(fontSize: 14)),
+            if (result.containsKey('distance')) ...[
+              const SizedBox(height: 12),
+              _buildDialogInfoRow(
+                Icons.location_on,
+                'Distance',
+                '${(result['distance'] as double).toStringAsFixed(0)}m from campus',
+                success ? Colors.green : Colors.red,
+              ),
+            ],
+            if (result.containsKey('wifiName')) ...[
+              const SizedBox(height: 8),
+              _buildDialogInfoRow(
+                Icons.wifi,
+                'WiFi',
+                result['wifiName'],
+                success ? Colors.green : Colors.red,
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('OK', style: TextStyle(color: Colors.orange.shade700, fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialogInfoRow(IconData icon, String label, String value, Color color) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 8),
+        Text('$label: ', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        Expanded(child: Text(value, style: TextStyle(fontSize: 13, color: Colors.grey.shade700))),
+      ],
+    );
   }
 
   @override
@@ -195,17 +310,20 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Quick Info Grid
+                      // Quick Info Grid — now shows attendance stats
                       Row(
                         children: [
-                          _buildInfoCard("CGPA", _student.cgpa.toString(), Icons.analytics, Colors.orange),
+                          _buildInfoCard("Present", _totalPresent.toString(), Icons.check_circle_outline, Colors.green),
                           const SizedBox(width: 15),
-                          _buildInfoCard("Status", "Regular", Icons.verified_user, Colors.green),
+                          _buildInfoCard("CGPA", _student.cgpa.toString(), Icons.analytics, Colors.orange),
                         ],
                       ),
                       const SizedBox(height: 25),
-                      // Attendance Marker Card
+                      // ─── Attendance Marker Card ───
                       _buildAttendanceMarker(),
+                      const SizedBox(height: 25),
+                      // ─── Verification Requirements ───
+                      _buildRequirementsCard(),
                       const SizedBox(height: 30),
                       const Text(
                         "Subject-wise Attendance",
@@ -244,6 +362,99 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           ),
         );
       }
+    );
+  }
+
+  // ─── Verification Requirements Card ────────────────────────────────
+  Widget _buildRequirementsCard() {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.blue.shade50,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.blue.shade100),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.blue.shade700, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                'Attendance Requirements',
+                style: TextStyle(
+                  fontSize: 14,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.blue.shade700,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _buildRequirementRow(
+            Icons.location_on,
+            'GPS Location',
+            'Must be within 300m of LPU Campus',
+          ),
+          const SizedBox(height: 8),
+          _buildRequirementRow(
+            Icons.wifi,
+            'WiFi Network',
+            'Must be connected to "${_attendanceService.allowedWifiName}"',
+          ),
+          const SizedBox(height: 8),
+          _buildRequirementRow(
+            Icons.calendar_today,
+            'One per day',
+            'Attendance can only be marked once per day',
+          ),
+          if (kIsWeb) ...[
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.amber.shade100,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.computer, size: 16, color: Colors.amber.shade800),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Web mode: GPS & WiFi checks are simulated. Attendance is auto-approved.',
+                      style: TextStyle(fontSize: 11, color: Colors.amber.shade900),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildRequirementRow(IconData icon, String title, String desc) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 16, color: Colors.blue.shade400),
+        const SizedBox(width: 8),
+        Expanded(
+          child: RichText(
+            text: TextSpan(
+              style: TextStyle(fontSize: 12, color: Colors.grey.shade800),
+              children: [
+                TextSpan(text: '$title: ', style: const TextStyle(fontWeight: FontWeight.bold)),
+                TextSpan(text: desc),
+              ],
+            ),
+          ),
+        ),
+      ],
     );
   }
 
@@ -299,11 +510,25 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
                       decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(12)),
                       child: Text("SIMULATION", style: TextStyle(color: Colors.blue.shade700, fontWeight: FontWeight.bold, fontSize: 10)),
                     ),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(20)),
-                    child: Text("LPU Phagwara", style: TextStyle(color: Colors.orange.shade700, fontWeight: FontWeight.bold, fontSize: 12)),
-                  ),
+                  if (_alreadyMarkedToday)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(20)),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.check_circle, size: 14, color: Colors.green.shade700),
+                          const SizedBox(width: 4),
+                          Text("PRESENT", style: TextStyle(color: Colors.green.shade700, fontWeight: FontWeight.bold, fontSize: 10)),
+                        ],
+                      ),
+                    )
+                  else
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(color: Colors.orange.shade50, borderRadius: BorderRadius.circular(20)),
+                      child: Text("LPU Phagwara", style: TextStyle(color: Colors.orange.shade700, fontWeight: FontWeight.bold, fontSize: 12)),
+                    ),
                 ],
               ),
             ],
@@ -312,29 +537,54 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
           GestureDetector(
             onTap: _isLoading ? null : _markAttendance,
             child: ScaleTransition(
-              scale: _isLoading ? const AlwaysStoppedAnimation(1.0) : _pulseAnimation,
+              scale: (_isLoading || _alreadyMarkedToday) ? const AlwaysStoppedAnimation(1.0) : _pulseAnimation,
               child: Container(
                 width: 90,
                 height: 90,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
-                  color: _isSuccess ? Colors.green : (_isError ? Colors.red : Colors.orange.shade700),
-                  boxShadow: [BoxShadow(color: Colors.orange.withOpacity(0.4), blurRadius: 15, offset: const Offset(0, 5))],
+                  color: _alreadyMarkedToday
+                      ? Colors.green
+                      : (_isError ? Colors.red : Colors.orange.shade700),
+                  boxShadow: [
+                    BoxShadow(
+                      color: (_alreadyMarkedToday ? Colors.green : Colors.orange).withOpacity(0.4),
+                      blurRadius: 15,
+                      offset: const Offset(0, 5),
+                    ),
+                  ],
                 ),
-                child: _isLoading 
-                  ? const Padding(padding: EdgeInsets.all(25), child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3)) 
-                  : Icon(_isSuccess ? Icons.check : (_isError ? Icons.close : Icons.fingerprint), color: Colors.white, size: 45),
+                child: _isLoading
+                    ? const Padding(
+                        padding: EdgeInsets.all(25),
+                        child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+                      )
+                    : Icon(
+                        _alreadyMarkedToday
+                            ? Icons.check
+                            : (_isError ? Icons.close : Icons.fingerprint),
+                        color: Colors.white,
+                        size: 45,
+                      ),
               ),
             ),
           ),
           const SizedBox(height: 20),
           Text(
-            _isSuccess ? "Success!" : (_isError ? "Try Again" : "Mark Attendance"),
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: _isSuccess ? Colors.green : (_isError ? Colors.red : Colors.orange.shade800)),
+            _alreadyMarkedToday
+                ? "Marked Present ✓"
+                : (_isError ? "Try Again" : "Mark Attendance"),
+            style: TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+              color: _alreadyMarkedToday
+                  ? Colors.green
+                  : (_isError ? Colors.red : Colors.orange.shade800),
+            ),
           ),
           const SizedBox(height: 6),
           Text(
-             _statusMessage.replaceAll('SUCCESS: ', ''),
+            _statusMessage,
             textAlign: TextAlign.center,
             style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
           ),

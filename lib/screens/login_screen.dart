@@ -113,11 +113,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       shape: BoxShape.circle,
                       boxShadow: [BoxShadow(color: Colors.black26, blurRadius: 15, offset: const Offset(0, 5))],
                     ),
-                    padding: const EdgeInsets.all(15),
-                    child: Image.network(
-                      'https://api.dicebear.com/7.x/initials/svg?seed=AttendTrack&backgroundColor=fb8c00', // Placeholder for generated logo
-                      fit: BoxFit.contain,
-                    ),
+                    child: Icon(Icons.fingerprint, size: 60, color: Colors.orange.shade700),
                   ),
                   const SizedBox(height: 25),
                   const Text(
