@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import '../services/auth_service.dart';
 import '../models/student_model.dart';
 
+
 class ProfileScreen extends StatefulWidget {
   final String uid;
 
@@ -29,6 +30,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isSaving = false;
   bool _isUploading = false;
   Student? _student;
+  Uint8List? _uploadedImageBytes; // Stores image bytes locally to bypass CORS
 
   final ImagePicker _picker = ImagePicker();
 
@@ -120,12 +122,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       }
 
       setState(() {
-        _photoUrl = "$downloadUrl&t=${DateTime.now().millisecondsSinceEpoch}";
+        _uploadedImageBytes = bytes; // Store bytes locally for immediate display
+        _photoUrl = downloadUrl;
         _isUploading = false;
       });
       
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Profile photo updated instantly!"), backgroundColor: Colors.green),
+        const SnackBar(content: Text("Profile photo updated!"), backgroundColor: Colors.green),
       );
     } catch (e) {
       setState(() => _isUploading = false);
@@ -154,13 +157,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       uid: widget.uid,
       name: _nameController!.text.trim(),
       email: _student?.email ?? "",
-      photoUrl: _photoUrl,
+      photoUrl: _student?.photoUrl ?? "",
       regNo: _regNoController!.text.trim(),
       section: _sectionController!.text.trim(),
       cgpa: _student?.cgpa ?? 0.0,
       address: _addressController?.text.trim() ?? "",
       phone: _phoneController?.text.trim() ?? "",
       lastUpdated: _student?.lastUpdated ?? DateTime.now().millisecondsSinceEpoch,
+      role: _student?.role ?? 'student',
     );
 
     try {
@@ -200,9 +204,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
             _isLoading = false;
           } else {
             // Update photo URL if it changed externally (e.g. from upload)
-            final newUrl = liveStudent.photoUrl.contains('?') 
-                ? "${liveStudent.photoUrl}&v=${liveStudent.lastUpdated}"
-                : "${liveStudent.photoUrl}?v=${liveStudent.lastUpdated}";
+            final newUrl = liveStudent.photoUrl.isEmpty
+                ? ""
+                : liveStudent.photoUrl.contains('?') 
+                    ? "${liveStudent.photoUrl}&v=${liveStudent.lastUpdated}"
+                    : "${liveStudent.photoUrl}?v=${liveStudent.lastUpdated}";
 
             if (_photoUrl.isEmpty || (_photoUrl != newUrl && !_isUploading)) {
               _photoUrl = newUrl;
@@ -254,13 +260,31 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             child: CircleAvatar(
                               radius: 60,
                               backgroundColor: Colors.white,
-                              child: CircleAvatar(
-                                radius: 56,
-                                backgroundImage: NetworkImage(_photoUrl.isEmpty ? "https://api.dicebear.com/7.x/initials/png?seed=Profile" : _photoUrl),
-                                child: _isUploading 
-                                  ? const CircularProgressIndicator(color: Colors.orange) 
-                                  : null,
-                              ),
+                            child: ClipOval(
+                              child: _isUploading 
+                                  ? const CircularProgressIndicator(color: Colors.orange)
+                                  : _uploadedImageBytes != null
+                                      ? Image.memory(
+                                          _uploadedImageBytes!,
+                                          width: 112,
+                                          height: 112,
+                                          fit: BoxFit.cover,
+                                        )
+                                      : Image.network(
+                                          _photoUrl.isEmpty ? "https://api.dicebear.com/7.x/initials/png?seed=Profile" : _photoUrl,
+                                          width: 112,
+                                          height: 112,
+                                          fit: BoxFit.cover,
+                                          errorBuilder: (context, error, stackTrace) {
+                                            return Container(
+                                              width: 112,
+                                              height: 112,
+                                              color: Colors.orange.shade100,
+                                              child: Icon(Icons.person, color: Colors.orange.shade700, size: 50),
+                                            );
+                                          },
+                                        ),
+                            ),
                             ),
                           ),
                           Positioned(
@@ -329,6 +353,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         const SizedBox(height: 15),
                         _buildSectionTitle("Account Settings"),
                         const SizedBox(height: 15),
+
                         _buildLogoutButton(),
 
                         const SizedBox(height: 30),

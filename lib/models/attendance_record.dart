@@ -4,12 +4,15 @@ class AttendanceRecord {
   final String id;
   final String uid;
   final String email;
+  final String subjectCode;   // e.g. "CS301"
+  final String subjectName;   // e.g. "Computer Networks"
+  final String slotTime;      // e.g. "09:00 AM - 10:00 AM"
   final double latitude;
   final double longitude;
   final double distanceFromCampus;
   final String wifiName;
   final String wifiBSSID;
-  final String status; // "Present", "Rejected"
+  final String status;        // "Present", "Rejected"
   final String rejectionReason;
   final bool isSimulated;
   final DateTime? markedAt;
@@ -18,6 +21,9 @@ class AttendanceRecord {
     this.id = '',
     required this.uid,
     required this.email,
+    required this.subjectCode,
+    required this.subjectName,
+    this.slotTime = '',
     required this.latitude,
     required this.longitude,
     required this.distanceFromCampus,
@@ -33,6 +39,9 @@ class AttendanceRecord {
     return {
       'uid': uid,
       'email': email,
+      'subjectCode': subjectCode,
+      'subjectName': subjectName,
+      'slotTime': slotTime,
       'latitude': latitude,
       'longitude': longitude,
       'distanceFromCampus': distanceFromCampus,
@@ -42,7 +51,7 @@ class AttendanceRecord {
       'rejectionReason': rejectionReason,
       'isSimulated': isSimulated,
       'time': FieldValue.serverTimestamp(),
-      'dateKey': _todayKey(), // e.g. "2026-04-21" — for one-per-day logic
+      'dateKey': _todayKey(), // e.g. "2026-04-22" for one-per-subject-per-day
     };
   }
 
@@ -53,6 +62,9 @@ class AttendanceRecord {
       id: doc.id,
       uid: map['uid'] ?? '',
       email: map['email'] ?? '',
+      subjectCode: map['subjectCode'] ?? '',
+      subjectName: map['subjectName'] ?? 'General',
+      slotTime: map['slotTime'] ?? '',
       latitude: (map['latitude'] ?? 0.0).toDouble(),
       longitude: (map['longitude'] ?? 0.0).toDouble(),
       distanceFromCampus: (map['distanceFromCampus'] ?? 0.0).toDouble(),

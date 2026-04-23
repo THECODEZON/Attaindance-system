@@ -7,6 +7,8 @@ import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/history_screen.dart';
 import 'screens/profile_screen.dart';
+import 'screens/admin_leave_screen.dart';
+import 'models/student_model.dart';
 
 import 'firebase_options.dart';
 
@@ -63,10 +65,26 @@ class AuthWrapper extends StatelessWidget {
         }
 
         if (snapshot.hasData && snapshot.data != null) {
-          // User is logged in
-          return MainNavigationScreen(
-            uid: snapshot.data!.uid,
-            email: snapshot.data!.email ?? "No Email",
+          // User is authenticated, check their role
+          return FutureBuilder<Student?>(
+            future: _authService.getStudentProfile(snapshot.data!.uid),
+            builder: (context, profileSnapshot) {
+              if (profileSnapshot.connectionState == ConnectionState.waiting) {
+                return const Scaffold(body: Center(child: CircularProgressIndicator()));
+              }
+
+              final profile = profileSnapshot.data;
+              if (profile != null && profile.role == 'admin') {
+                // Route to Admin Dashboard
+                return const AdminLeaveScreen();
+              }
+
+              // Default: Route to Student Dashboard
+              return MainNavigationScreen(
+                uid: snapshot.data!.uid,
+                email: snapshot.data!.email ?? "No Email",
+              );
+            },
           );
         }
 

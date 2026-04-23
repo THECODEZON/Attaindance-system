@@ -18,6 +18,7 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
+  String _selectedRole = 'student'; // Added for RBAC
 
   @override
   void dispose() {
@@ -41,7 +42,21 @@ class _LoginScreenState extends State<LoginScreen> {
     });
 
     try {
-      await _authService.signIn(email, password);
+      final user = await _authService.signIn(email, password);
+      if (user != null) {
+        // Verify role
+        final profile = await _authService.getStudentProfile(user.uid);
+        if (profile != null && profile.role != _selectedRole) {
+          await _authService.signOut();
+          if (mounted) {
+            setState(() {
+              _errorMessage = 'Account not found for the selected role: ${_selectedRole.toUpperCase()}.';
+              _isLoading = false;
+            });
+          }
+          return;
+        }
+      }
     } on FirebaseAuthException catch (e) {
       String msg = '';
       switch (e.code) {
@@ -153,6 +168,62 @@ class _LoginScreenState extends State<LoginScreen> {
                         Text('Sign in to continue', style: TextStyle(color: Colors.grey[600], fontSize: 14)),
                         const SizedBox(height: 24),
 
+                        // Role Selection Toggle
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () => setState(() => _selectedRole = 'student'),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    decoration: BoxDecoration(
+                                      color: _selectedRole == 'student' ? Colors.orange : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(11),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        "Student",
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: _selectedRole == 'student' ? Colors.white : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () => setState(() => _selectedRole = 'admin'),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    decoration: BoxDecoration(
+                                      color: _selectedRole == 'admin' ? Colors.orange : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(11),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        "Admin",
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: _selectedRole == 'admin' ? Colors.white : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+
                         // Error Banner
                         if (_errorMessage != null) ...[
                           Container(
@@ -254,45 +325,6 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ),
                         const SizedBox(height: 24),
-
-                        // Demo Access Section
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.orange.shade50,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: Colors.orange.shade100),
-                          ),
-                          child: Column(
-                            children: [
-                              const Text(
-                                "Quick Access (Example)",
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.orange,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              OutlinedButton(
-                                onPressed: () {
-                                  _emailController.text = "test@lpu.edu.in";
-                                  _passwordController.text = "password123";
-                                  _login();
-                                },
-                                style: OutlinedButton.styleFrom(
-                                  side: const BorderSide(color: Colors.orange),
-                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                                ),
-                                child: const Text(
-                                  "Login as Test Student",
-                                  style: TextStyle(color: Colors.orange, fontSize: 13),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        const SizedBox(height: 16),
 
                         // Sign up
                         Row(

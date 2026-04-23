@@ -15,17 +15,20 @@ class _SignupScreenState extends State<SignupScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
+  final _adminCodeController = TextEditingController(); // Added for admin passcode
   final AuthService _authService = AuthService();
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _obscureConfirm = true;
   String? _errorMessage;
+  String _selectedRole = 'student'; // Added for RBAC
 
   @override
   void dispose() {
     _emailController.dispose();
     _passwordController.dispose();
     _confirmPasswordController.dispose();
+    _adminCodeController.dispose();
     super.dispose();
   }
 
@@ -46,6 +49,10 @@ class _SignupScreenState extends State<SignupScreen> {
       setState(() => _errorMessage = 'Passwords do not match.');
       return;
     }
+    if (_selectedRole == 'admin' && _adminCodeController.text.trim() != 'admin123') {
+      setState(() => _errorMessage = 'Invalid Admin Passcode.');
+      return;
+    }
 
     setState(() {
       _isLoading = true;
@@ -55,18 +62,19 @@ class _SignupScreenState extends State<SignupScreen> {
     try {
       final user = await _authService.signUp(email, password);
       if (user != null) {
-        // Create initial student profile
+        // Create initial profile
         final newStudent = Student(
           uid: user.uid,
           name: email.split('@')[0], // Default name from email
           email: email,
           photoUrl: "https://api.dicebear.com/7.x/initials/png?seed=${user.uid}&backgroundColor=fb8c00",
-          regNo: "Pending",
-          section: "N/A",
+          regNo: _selectedRole == 'admin' ? "Admin" : "Pending",
+          section: _selectedRole == 'admin' ? "Admin" : "N/A",
           cgpa: 0.0,
           address: "Not Provided",
           phone: "Not Provided",
           lastUpdated: DateTime.now().millisecondsSinceEpoch,
+          role: _selectedRole, // Save selected role
         );
         
         try {
@@ -185,6 +193,62 @@ class _SignupScreenState extends State<SignupScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        // Role Selection Toggle
+                        Container(
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () => setState(() => _selectedRole = 'student'),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    decoration: BoxDecoration(
+                                      color: _selectedRole == 'student' ? Colors.orange : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(11),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        "Student",
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: _selectedRole == 'student' ? Colors.white : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                child: GestureDetector(
+                                  onTap: () => setState(() => _selectedRole = 'admin'),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    decoration: BoxDecoration(
+                                      color: _selectedRole == 'admin' ? Colors.orange : Colors.transparent,
+                                      borderRadius: BorderRadius.circular(11),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        "Admin",
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: _selectedRole == 'admin' ? Colors.white : Colors.grey.shade700,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+
                         // Error Banner
                         if (_errorMessage != null) ...[
                           Container(
@@ -205,6 +269,27 @@ class _SignupScreenState extends State<SignupScreen> {
                                   ),
                                 ),
                               ],
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                        ],
+
+                        // Admin Passcode
+                        if (_selectedRole == 'admin') ...[
+                          TextField(
+                            controller: _adminCodeController,
+                            obscureText: true,
+                            decoration: InputDecoration(
+                              labelText: 'Admin Passcode',
+                              hintText: 'Enter secret admin code',
+                              prefixIcon: const Icon(Icons.admin_panel_settings_outlined, color: Colors.orange),
+                              border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: const BorderSide(color: Colors.orange, width: 2),
+                              ),
+                              filled: true,
+                              fillColor: Colors.orange.shade50,
                             ),
                           ),
                           const SizedBox(height: 16),

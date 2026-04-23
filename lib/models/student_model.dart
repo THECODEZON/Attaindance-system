@@ -9,6 +9,7 @@ class Student {
   final String address;
   final String phone;
   final int lastUpdated;
+  final String role; // 'student' or 'admin'
 
   Student({
     required this.uid,
@@ -21,6 +22,7 @@ class Student {
     required this.address,
     required this.phone,
     this.lastUpdated = 0,
+    this.role = 'student',
   });
 
   Map<String, dynamic> toMap() {
@@ -35,6 +37,7 @@ class Student {
       'address': address,
       'phone': phone,
       'lastUpdated': lastUpdated,
+      'role': role,
     };
   }
 
@@ -50,6 +53,7 @@ class Student {
       address: map['address'] ?? 'No Address Provided',
       phone: map['phone'] ?? 'No Phone Provided',
       lastUpdated: map['lastUpdated'] ?? 0,
+      role: map['role'] ?? 'student',
     );
   }
 
@@ -65,6 +69,7 @@ class Student {
       address: "Jalandhar Cantt, Punjab, India",
       phone: "+91 77078 87151",
       lastUpdated: DateTime.now().millisecondsSinceEpoch,
+      role: 'student',
     );
   }
 
@@ -79,6 +84,7 @@ class Student {
     String? address,
     String? phone,
     int? lastUpdated,
+    String? role,
   }) {
     return Student(
       uid: uid ?? this.uid,
@@ -91,6 +97,7 @@ class Student {
       address: address ?? this.address,
       phone: phone ?? this.phone,
       lastUpdated: lastUpdated ?? this.lastUpdated,
+      role: role ?? this.role,
     );
   }
 }
