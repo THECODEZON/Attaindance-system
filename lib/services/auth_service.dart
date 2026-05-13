@@ -42,6 +42,15 @@ class AuthService {
     final uploadTask = await ref.putData(fileBytes, SettableMetadata(contentType: 'image/jpeg'));
     return await uploadTask.ref.getDownloadURL();
   }
+
+  Future<Uint8List?> getProfileImageBytes(String uid) async {
+    try {
+      final ref = _storage.ref().child('profiles').child('$uid.jpg');
+      return await ref.getData(1024 * 1024 * 5); // Max 5MB
+    } catch (e) {
+      return null;
+    }
+  }
   Future<User?> signUp(String email, String password) async {
     try {
       UserCredential credential = await _auth.createUserWithEmailAndPassword(

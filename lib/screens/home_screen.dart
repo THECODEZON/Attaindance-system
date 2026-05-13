@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:intl/intl.dart';
 import '../services/attendance_service.dart';
 import '../services/auth_service.dart';
+import '../services/geofencing_service.dart';
 import '../models/student_model.dart';
 import '../models/timetable.dart';
 import 'leave_screen.dart';
@@ -21,8 +22,10 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   final AttendanceService _attendanceService = AttendanceService();
   final AuthService _authService = AuthService();
+  final GeofencingService _geofencingService = GeofencingService();
   late Student _student;
   bool _isProfileLoading = true;
+  Uint8List? _profileImageBytes; // Local bytes for Web robustness
 
   String _currentTime = '';
   String _currentDate = '';
@@ -45,6 +48,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _loadProfile();
     _loadTodayStatus();
     _loadStats();
+    _startGeofencing();
 
     _updateTime();
     _timer = Timer.periodic(const Duration(seconds: 1), (_) => _updateTime());
@@ -55,11 +59,20 @@ class _HomeScreenState extends State<HomeScreen> {
       final profile = await _authService.getStudentProfile(widget.uid);
       if (profile != null && mounted) {
         setState(() { _student = profile; _isProfileLoading = false; });
+        _loadProfileImageBytes(widget.uid);
       } else if (mounted) {
         setState(() => _isProfileLoading = false);
       }
     } catch (e) {
       if (mounted) setState(() => _isProfileLoading = false);
+    }
+  }
+
+  Future<void> _loadProfileImageBytes(String uid) async {
+    if (uid.isEmpty) return;
+    final bytes = await _authService.getProfileImageBytes(uid);
+    if (mounted && bytes != null) {
+      setState(() => _profileImageBytes = bytes);
     }
   }
 
@@ -79,9 +92,23 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
+  Future<void> _startGeofencing() async {
+    final started = await _geofencingService.start();
+    if (started && mounted) {
+      // Listen for geofence status changes to rebuild UI
+      _geofencingService.statusNotifier.addListener(_onGeofenceUpdate);
+    }
+  }
+
+  void _onGeofenceUpdate() {
+    if (mounted) setState(() {});
+  }
+
   @override
   void dispose() {
     _timer.cancel();
+    _geofencingService.statusNotifier.removeListener(_onGeofenceUpdate);
+    _geofencingService.stop();
     super.dispose();
   }
 
@@ -181,7 +208,12 @@ class _HomeScreenState extends State<HomeScreen> {
     return StreamBuilder<Student?>(
       stream: _authService.getStudentStream(widget.uid),
       builder: (context, snapshot) {
-        if (snapshot.hasData && snapshot.data != null) _student = snapshot.data!;
+        if (snapshot.hasData && snapshot.data != null) {
+           if (_student.photoUrl != snapshot.data!.photoUrl) {
+             _loadProfileImageBytes(widget.uid);
+           }
+           _student = snapshot.data!;
+        }
 
         return Scaffold(
           backgroundColor: Colors.grey.shade50,
@@ -221,24 +253,38 @@ class _HomeScreenState extends State<HomeScreen> {
                           CircleAvatar(
                             radius: 38,
                             backgroundColor: Colors.white,
-                            child: ClipOval(
-                              child: Image.network(
-                                _student.photoUrl.isEmpty 
-                                    ? "https://api.dicebear.com/7.x/initials/png?seed=Profile"
-                                    : _student.photoUrl.contains('?')
-                                        ? "${_student.photoUrl}&v=${_student.lastUpdated}"
-                                        : "${_student.photoUrl}?v=${_student.lastUpdated}",
-                                width: 70,
-                                height: 70,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) {
-                                  return Container(
-                                    width: 70,
-                                    height: 70,
-                                    color: Colors.orange.shade100,
-                                    child: Icon(Icons.person, color: Colors.orange.shade700, size: 36),
-                                  );
-                                },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 2),
+                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.08), blurRadius: 8, spreadRadius: 1)],
+                              ),
+                              child: ClipOval(
+                                child: _profileImageBytes != null
+                                    ? Image.memory(
+                                        _profileImageBytes!,
+                                        width: 70,
+                                        height: 70,
+                                        fit: BoxFit.cover,
+                                      )
+                                    : Image.network(
+                                        _student.photoUrl.isEmpty 
+                                            ? "https://api.dicebear.com/7.x/initials/png?seed=${_student.name}&backgroundColor=fb8c00"
+                                            : _student.photoUrl.contains('?')
+                                                ? "${_student.photoUrl}&v=${_student.lastUpdated}"
+                                                : "${_student.photoUrl}?v=${_student.lastUpdated}",
+                                        width: 70,
+                                        height: 70,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (context, error, stackTrace) {
+                                          return Container(
+                                            width: 70,
+                                            height: 70,
+                                            color: Colors.orange.shade100,
+                                            child: Icon(Icons.person, color: Colors.orange.shade700, size: 36),
+                                          );
+                                        },
+                                      ),
                               ),
                             ),
                           ),
@@ -290,6 +336,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       ),
 
                       const SizedBox(height: 20),
+
+                      // ─── Geofence Campus Status Banner ─────────────
+                      _buildCampusStatusBanner(),
                       
                       // ─── Smart Next Class Banner ───────────────────
                       _buildNextClassBanner(),
@@ -299,12 +348,18 @@ class _HomeScreenState extends State<HomeScreen> {
                         children: [
                           const Text("Today's Classes", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                           const Spacer(),
-                          if (kIsWeb)
-                            Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(color: Colors.blue.shade50, borderRadius: BorderRadius.circular(8)),
-                              child: Text("SIMULATION", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.blue.shade700)),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(color: Colors.green.shade50, borderRadius: BorderRadius.circular(8)),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.radar, size: 11, color: Colors.green.shade700),
+                                const SizedBox(width: 4),
+                                Text("GEOFENCED", style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.green.shade700)),
+                              ],
                             ),
+                          ),
                         ],
                       ),
                       const SizedBox(height: 12),
@@ -669,6 +724,103 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  // ─── Live Campus Status Banner (Geofencing) ───────────────────────
+  Widget _buildCampusStatusBanner() {
+    final isInside = _geofencingService.isInsideCampus;
+    final statusText = _geofencingService.statusText;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isInside
+              ? [Colors.green.shade600, Colors.green.shade400]
+              : [Colors.red.shade600, Colors.red.shade400],
+        ),
+        borderRadius: BorderRadius.circular(14),
+        boxShadow: [
+          BoxShadow(
+            color: (isInside ? Colors.green : Colors.red).withOpacity(0.3),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.2),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              isInside ? Icons.location_on : Icons.location_off,
+              color: Colors.white,
+              size: 22,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'GEOFENCE STATUS',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.85),
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  statusText,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.25),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                    color: isInside ? Colors.greenAccent : Colors.redAccent,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  isInside ? 'ACTIVE' : 'AWAY',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildRequirementsCard() {
     return Container(
       width: double.infinity,
@@ -689,13 +841,15 @@ class _HomeScreenState extends State<HomeScreen> {
             ],
           ),
           const SizedBox(height: 10),
-          _reqRow(Icons.location_on, 'Must be within 300m of LPU Campus'),
+          _reqRow(Icons.radar, 'Geofencing: Must be inside LPU Campus (${GeofencingService.campusRadiusMeters.toStringAsFixed(0)}m radius)'),
           const SizedBox(height: 6),
           _reqRow(Icons.wifi, 'Must be on "${_attendanceService.allowedWifiName}" WiFi'),
           const SizedBox(height: 6),
           _reqRow(Icons.schedule, 'Mark during class hour only'),
           const SizedBox(height: 6),
           _reqRow(Icons.block, 'One mark per subject per day'),
+          const SizedBox(height: 6),
+          _reqRow(Icons.gps_off, 'Mock/Fake GPS is blocked'),
           if (kIsWeb) ...[
             const SizedBox(height: 8),
             Container(
@@ -705,7 +859,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   Icon(Icons.computer, size: 14, color: Colors.amber.shade800),
                   const SizedBox(width: 6),
-                  Expanded(child: Text('Web mode: All classes can be marked (simulation)', style: TextStyle(fontSize: 10, color: Colors.amber.shade900))),
+                  Expanded(child: Text('Web mode: Geofence simulated — all classes can be marked', style: TextStyle(fontSize: 10, color: Colors.amber.shade900))),
                 ],
               ),
             ),

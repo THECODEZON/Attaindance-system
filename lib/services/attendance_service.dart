@@ -1,17 +1,18 @@
-import 'package:geolocator/geolocator.dart';
 import 'package:network_info_plus/network_info_plus.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../models/attendance_record.dart';
 import '../models/timetable.dart';
+import 'geofencing_service.dart';
 
 class AttendanceService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final GeofencingService _geofencingService = GeofencingService();
 
   // ─── Campus Configuration ───────────────────────────────────────────
-  final double allowedLat = 31.2536;
-  final double allowedLon = 75.7036;
-  final double maxAllowedDistanceInMeters = 300;
+  final double allowedLat = GeofencingService.campusLat;
+  final double allowedLon = GeofencingService.campusLon;
+  final double maxAllowedDistanceInMeters = GeofencingService.campusRadiusMeters;
 
   final String allowedWifiName = "LPU_WiFi";
   final String allowedWifiBSSID = "00:00:00:00:00:00";
@@ -36,21 +37,17 @@ class AttendanceService {
         };
       }
 
-      // ✅ Web Simulation — skip hardware checks
-      if (kIsWeb) {
-        return await _markAttendanceWeb(uid, email, classSlot);
-      }
-
-      // ─── Mobile Flow ────────────────────────────────────────────
+      // ─── Unified Flow (Mobile + Web) ──────────────────────────────
 
       // 0.5 Check Schedule Time
       bool isTimeValid = classSlot.isActive(DateTime.now());
       if (!isTimeValid) {
         await _saveRecord(
           uid: uid, email: email, classSlot: classSlot,
-          lat: allowedLat, lon: allowedLon, // Use allowed/default for time failure if location not yet fetched
+          lat: allowedLat, lon: allowedLon,
           distance: 0.0, wifi: "N/A", bssid: "N/A",
           status: 'Absent', reason: 'Not within scheduled class time (${classSlot.timeRange}).', simulated: false,
+          geofenceStatus: 'N/A',
         );
         return {
           'success': false,
@@ -59,125 +56,86 @@ class AttendanceService {
         };
       }
 
-      // 1. Check location services & permissions
-      bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
-      if (!serviceEnabled) {
-        return {'success': false, 'message': 'Location services are disabled. Please enable GPS.'};
-      }
-
-      LocationPermission permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          return {'success': false, 'message': 'Location permissions are denied.'};
+      // 1. Ensure geofencing service is running
+      if (!_geofencingService.isRunning) {
+        final started = await _geofencingService.start();
+        if (!started) {
+          return {'success': false, 'message': 'Location services are disabled or permission denied. Please enable GPS and grant location permission.'};
         }
-      }
-      if (permission == LocationPermission.deniedForever) {
-        return {'success': false, 'message': 'Location permissions are permanently denied.'};
-      }
-
-      // 2. Get current GPS coordinates
-      Position position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(accuracy: LocationAccuracy.high),
-      );
-
-      if (position.isMocked) {
-        return {'success': false, 'message': 'Fake GPS detected! Attendance rejected.'};
+        // Wait briefly for first location fix
+        await Future.delayed(const Duration(seconds: 3));
       }
 
-      // 3. Calculate distance
-      double distance = Geolocator.distanceBetween(
-        allowedLat, allowedLon, position.latitude, position.longitude,
-      );
+      // 2. Check geofence status — must be INSIDE campus
+      final bool isInRange = _geofencingService.isInsideCampus;
+      final double currentLat = _geofencingService.currentLat;
+      final double currentLon = _geofencingService.currentLon;
+      final String geofenceStatus = _geofencingService.statusNotifier.value.name;
 
-      // 4. Get WiFi info
-      final info = NetworkInfo();
-      String wifiName = "Unknown WiFi";
-      String wifiBSSID = "Unknown BSSID";
-      try {
-        String? name = await info.getWifiName();
-        if (name != null) wifiName = name.replaceAll('"', '');
-        String? bssid = await info.getWifiBSSID();
-        if (bssid != null) wifiBSSID = bssid;
-      } catch (e) {
-        wifiName = "Unavailable";
-        wifiBSSID = "Unavailable";
+      // 3. Get WiFi info (mobile only — browsers can't access WiFi)
+      String wifiName = "N/A (Web)";
+      String wifiBSSID = "N/A (Web)";
+      bool isOnWifi = true; // Default true on web (skip WiFi check)
+
+      if (!kIsWeb) {
+        final info = NetworkInfo();
+        try {
+          String? name = await info.getWifiName();
+          if (name != null) wifiName = name.replaceAll('"', '');
+          String? bssid = await info.getWifiBSSID();
+          if (bssid != null) wifiBSSID = bssid;
+        } catch (e) {
+          wifiName = "Unavailable";
+          wifiBSSID = "Unavailable";
+        }
+        isOnWifi = wifiName == allowedWifiName;
       }
 
-      // 5. Validation
-      bool isInRange = distance <= maxAllowedDistanceInMeters;
-      bool isOnWifi = wifiName == allowedWifiName;
+      // 4. Validation — Location is ALWAYS required
       bool isApproved = isInRange && isOnWifi;
 
       String rejectionReason = '';
       if (!isInRange) {
-        rejectionReason += 'You are ${distance.toStringAsFixed(0)}m away (max ${maxAllowedDistanceInMeters.toStringAsFixed(0)}m). ';
+        rejectionReason += 'Geofence: $geofenceStatus — You are outside the LPU Campus (${maxAllowedDistanceInMeters.toStringAsFixed(0)}m zone). ';
       }
-      if (!isOnWifi) {
+      if (!isOnWifi && !kIsWeb) {
         rejectionReason += 'Not connected to "$allowedWifiName" (current: "$wifiName").';
       }
 
       if (!isApproved) {
         await _saveRecord(
           uid: uid, email: email, classSlot: classSlot,
-          lat: position.latitude, lon: position.longitude,
-          distance: distance, wifi: wifiName, bssid: wifiBSSID,
+          lat: currentLat, lon: currentLon,
+          distance: 0, wifi: wifiName, bssid: wifiBSSID,
           status: 'Rejected', reason: rejectionReason.trim(), simulated: false,
+          geofenceStatus: geofenceStatus,
         );
         return {
           'success': false,
           'message': 'Attendance Rejected:\n$rejectionReason',
-          'distance': distance, 'wifiName': wifiName,
+          'distance': 0.0, 'wifiName': wifiName,
+          'geofenceStatus': geofenceStatus,
         };
       }
 
-      // 6. Approved
+      // 5. Approved — Student is inside LPU Campus!
       await _saveRecord(
         uid: uid, email: email, classSlot: classSlot,
-        lat: position.latitude, lon: position.longitude,
-        distance: distance, wifi: wifiName, bssid: wifiBSSID,
+        lat: currentLat, lon: currentLon,
+        distance: 0, wifi: wifiName, bssid: wifiBSSID,
         status: 'Present', reason: '', simulated: false,
+        geofenceStatus: geofenceStatus,
       );
 
       return {
         'success': true,
-        'message': '${classSlot.subjectName} — Attendance marked!',
-        'distance': distance, 'wifiName': wifiName,
+        'message': '${classSlot.subjectName} — Attendance marked! ✅\nGeofence: $geofenceStatus',
+        'distance': 0.0, 'wifiName': wifiName,
+        'geofenceStatus': geofenceStatus,
       };
     } catch (e) {
       return {'success': false, 'message': 'Error: $e'};
     }
-  }
-
-  // ─── Web Simulation ────────────────────────────────────────────────
-  Future<Map<String, dynamic>> _markAttendanceWeb(String uid, String email, ClassSlot classSlot) async {
-    bool isTimeValid = classSlot.isActive(DateTime.now());
-    
-    if (!isTimeValid) {
-      await _saveRecord(
-        uid: uid, email: email, classSlot: classSlot,
-        lat: allowedLat, lon: allowedLon,
-        distance: 0, wifi: webDemoWifiName, bssid: webDemoWifiBSSID,
-        status: 'Absent', reason: 'Not within scheduled class time (${classSlot.timeRange}).', simulated: true,
-      );
-      return {
-        'success': false,
-        'message': 'Attendance Rejected: Not within scheduled class time (${classSlot.timeRange}). Marked as Absent.',
-        'distance': 0.0, 'wifiName': webDemoWifiName,
-      };
-    }
-
-    await _saveRecord(
-      uid: uid, email: email, classSlot: classSlot,
-      lat: allowedLat, lon: allowedLon,
-      distance: 0, wifi: webDemoWifiName, bssid: webDemoWifiBSSID,
-      status: 'Present', reason: '', simulated: true,
-    );
-    return {
-      'success': true,
-      'message': '${classSlot.subjectName} — Attendance marked! (Simulated)',
-      'distance': 0.0, 'wifiName': webDemoWifiName,
-    };
   }
 
   // ─── Firestore Write ───────────────────────────────────────────────
@@ -193,6 +151,7 @@ class AttendanceService {
     required String status,
     required String reason,
     required bool simulated,
+    required String geofenceStatus,
   }) async {
     final record = AttendanceRecord(
       uid: uid,
@@ -209,7 +168,9 @@ class AttendanceService {
       rejectionReason: reason,
       isSimulated: simulated,
     );
-    await _firestore.collection('attendance').add(record.toMap());
+    final recordMap = record.toMap();
+    recordMap['geofenceStatus'] = geofenceStatus; // Add geofence status to record
+    await _firestore.collection('attendance').add(recordMap);
   }
 
   // ─── Has Already Marked This Subject Today ─────────────────────────

@@ -31,6 +31,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   bool _isUploading = false;
   Student? _student;
   Uint8List? _uploadedImageBytes; // Stores image bytes locally to bypass CORS
+  Uint8List? _networkImageBytes; // Stores fetched network bytes for Web robustness
 
   final ImagePicker _picker = ImagePicker();
 
@@ -42,6 +43,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _loadProfile() async {
     final profile = await _authService.getStudentProfile(widget.uid);
+    if (profile != null) {
+      _loadNetworkImage(widget.uid);
+    }
     setState(() {
       _student = profile ?? Student.mock();
       _nameController = TextEditingController(text: _student!.name);
@@ -52,6 +56,14 @@ class _ProfileScreenState extends State<ProfileScreen> {
       _photoUrl = _student!.photoUrl;
       _isLoading = false;
     });
+  }
+
+  Future<void> _loadNetworkImage(String uid) async {
+    if (uid.isEmpty) return;
+    final bytes = await _authService.getProfileImageBytes(uid);
+    if (mounted && bytes != null) {
+      setState(() => _networkImageBytes = bytes);
+    }
   }
 
   Future<void> _pickAndUploadImage() async {
@@ -111,18 +123,27 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       setState(() => _isUploading = true);
       final Uint8List bytes = await image.readAsBytes();
+      
+      // Update local state immediately to show the image while uploading
+      setState(() {
+        _uploadedImageBytes = bytes;
+      });
+
       final String downloadUrl = await _authService.uploadProfileImage(widget.uid, bytes);
       
+      Student? updatedStudent;
       if (_student != null) {
-        final updatedProfile = _student!.copyWith(
+        updatedStudent = _student!.copyWith(
           photoUrl: downloadUrl,
           lastUpdated: DateTime.now().millisecondsSinceEpoch,
         );
-        await _authService.updateStudentProfile(updatedProfile);
+        await _authService.updateStudentProfile(updatedStudent);
       }
 
       setState(() {
-        _uploadedImageBytes = bytes; // Store bytes locally for immediate display
+        if (updatedStudent != null) {
+          _student = updatedStudent;
+        }
         _photoUrl = downloadUrl;
         _isUploading = false;
       });
@@ -157,13 +178,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
       uid: widget.uid,
       name: _nameController!.text.trim(),
       email: _student?.email ?? "",
-      photoUrl: _student?.photoUrl ?? "",
+      photoUrl: _photoUrl.split('?')[0], // Use current photoUrl and strip version tag
       regNo: _regNoController!.text.trim(),
       section: _sectionController!.text.trim(),
       cgpa: _student?.cgpa ?? 0.0,
       address: _addressController?.text.trim() ?? "",
       phone: _phoneController?.text.trim() ?? "",
-      lastUpdated: _student?.lastUpdated ?? DateTime.now().millisecondsSinceEpoch,
+      lastUpdated: DateTime.now().millisecondsSinceEpoch,
       role: _student?.role ?? 'student',
     );
 
@@ -212,6 +233,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
             if (_photoUrl.isEmpty || (_photoUrl != newUrl && !_isUploading)) {
               _photoUrl = newUrl;
+              _loadNetworkImage(widget.uid); // Re-fetch bytes when URL changes
             }
             _student = liveStudent; // Keep metadata fresh
           }
@@ -257,34 +279,62 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         children: [
                           GestureDetector(
                             onTap: _isUploading ? null : _pickAndUploadImage,
-                            child: CircleAvatar(
-                              radius: 60,
-                              backgroundColor: Colors.white,
-                            child: ClipOval(
-                              child: _isUploading 
-                                  ? const CircularProgressIndicator(color: Colors.orange)
-                                  : _uploadedImageBytes != null
-                                      ? Image.memory(
-                                          _uploadedImageBytes!,
-                                          width: 112,
-                                          height: 112,
-                                          fit: BoxFit.cover,
-                                        )
-                                      : Image.network(
-                                          _photoUrl.isEmpty ? "https://api.dicebear.com/7.x/initials/png?seed=Profile" : _photoUrl,
-                                          width: 112,
-                                          height: 112,
-                                          fit: BoxFit.cover,
-                                          errorBuilder: (context, error, stackTrace) {
-                                            return Container(
-                                              width: 112,
-                                              height: 112,
-                                              color: Colors.orange.shade100,
-                                              child: Icon(Icons.person, color: Colors.orange.shade700, size: 50),
-                                            );
-                                          },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 3),
+                                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, spreadRadius: 2)],
+                              ),
+                              child: ClipOval(
+                                child: Stack(
+                                  alignment: Alignment.center,
+                                  children: [
+                                    // Image layer
+                                    if (_uploadedImageBytes != null)
+                                      Image.memory(
+                                        _uploadedImageBytes!,
+                                        width: 120,
+                                        height: 120,
+                                        fit: BoxFit.cover,
+                                      )
+                                    else if (_networkImageBytes != null)
+                                      Image.memory(
+                                        _networkImageBytes!,
+                                        width: 120,
+                                        height: 120,
+                                        fit: BoxFit.cover,
+                                      )
+                                    else
+                                      Image.network(
+                                        _photoUrl.isEmpty 
+                                            ? "https://api.dicebear.com/7.x/initials/png?seed=${_student?.name ?? 'User'}&backgroundColor=fb8c00" 
+                                            : _photoUrl,
+                                        width: 120,
+                                        height: 120,
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (context, error, stackTrace) {
+                                          return Container(
+                                            width: 120,
+                                            height: 120,
+                                            color: Colors.orange.shade100,
+                                            child: Icon(Icons.person, color: Colors.orange.shade700, size: 60),
+                                          );
+                                        },
+                                      ),
+                                    
+                                    // Loading overlay
+                                    if (_isUploading)
+                                      Container(
+                                        width: 120,
+                                        height: 120,
+                                        color: Colors.black26,
+                                        child: const Center(
+                                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
                                         ),
-                            ),
+                                      ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
                           Positioned(
