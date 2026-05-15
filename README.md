@@ -132,10 +132,6 @@ This project demonstrates:
 
 ---
 
-
-
----
-
 # ⭐ If you like this project
 
 Please consider giving it a star ⭐ to support the project!
