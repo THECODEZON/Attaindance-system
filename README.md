@@ -132,12 +132,7 @@ This project demonstrates:
 
 ---
 
-# 👨‍💻 Author
 
-**Shashwat**
-
-GitHub:
-https://github.com/Shashwat1955
 
 ---
 
