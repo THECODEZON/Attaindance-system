@@ -1,4 +1,4 @@
-# 📍 Smart Attendance System (Flutter + Firebase)
+# 📍Geo Location-Based Attendance Tracking System
 
 A secure, location-aware mobile attendance system built using **Flutter** and **Firebase**, designed to prevent proxy attendance using **GPS location** and **WiFi BSSID verification**.
 
