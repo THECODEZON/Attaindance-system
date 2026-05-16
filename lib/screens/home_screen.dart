@@ -784,6 +784,18 @@ class _HomeScreenState extends State<HomeScreen> {
                     fontWeight: FontWeight.bold,
                   ),
                 ),
+                if (kDebugMode)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Text(
+                      '(${_geofencingService.currentLat.toStringAsFixed(4)}, ${_geofencingService.currentLon.toStringAsFixed(4)})',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.8),
+                        fontSize: 9,
+                        fontFamily: 'Courier',
+                      ),
+                    ),
+                  ),
               ],
             ),
           ),
